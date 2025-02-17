@@ -3,7 +3,7 @@
 # （3） bilevel+UC+SCL in an IEEE system  
 #      Now, for a system with 3-buses
 import Pkg 
-using JuMP,SCIP,Gurobi,CPLEX,Ipopt
+using JuMP,SCIP,Gurobi,CPLEX
 
 #-----------------------------------Define Parameters
 # reactance for the SGs
@@ -37,16 +37,17 @@ end
 
 for k in 1:numnodes                     #   calculate the admittance matrix of the SGs
     i = Int(data_SGs[k, 1])                                        # bus from
-    Y_g[k, k] = 1/data_SGs[k, 2]                                   # Diagonal elements 
+    Y_g[i, i] = 1/data_SGs[k, 2]                                   # diagonal elements 
 end 
 
 # SCC (p.u): I_SGs=E_g/X_dg  & I_IBG (pre-defined)
 β=0.95
 E_g=1
 E_SGs=β*1
-I_SGs=[E_g/data_SGs[1,2],E_g/data_SGs[2,2]]
+I_SGs=[E_SGs/data_SGs[1,2],E_SGs/data_SGs[2,2]]
 I_IBG=2
-I_Flim=1.5      # SCC limit
+Iₗᵢₘ=5     # SCC limit
+Zₘₐₓ=0.1
 
 Pᴰ=[2.2,1.8,3,6,5.8,5.2,5.6,3.8,2.5,2.7,3,2.6,2.2,2.1,4.2,5.8,6.2,6.3,6.5,6.6,6.3,6.2,6,5.7]*2 # modify the cofficient to lead feasible solutions!!!!
 P_wt=[2,1.5,1.6,1.8,1.3,0.6,2.8,3.3,3.9,4,3.3,2.9,2.7,2,0.2,3.2,5.1,3.1,1.8,2,1.3,1,2,3.8]*2
@@ -111,19 +112,38 @@ for t in 1:T-1       # bounds for the ramp of SGs in bus 1 & 2
     @constraint(model, -Rₘₐₓ[2]<=Pˢᴳ²[t+1]-Pˢᴳ²[t])         
 end
          
-# bounds for the SCC of SG in bus 1 
-Zₘₐₓ=0.085
-@variable(model, Z[1:3])  # Z₁₁, Z₁₂, Z₁₃ 
-@variable(model, μ_g[1:T])
 
-@constraint(model, μ_g.<=yˢᴳ¹*Zₘₐₓ)
-@constraint(model, μ_g.>=-yˢᴳ¹*Zₘₐₓ)
-@constraint(model, μ_g.<=Z[1]+(1-yˢᴳ¹)*Zₘₐₓ)
-@constraint(model, μ_g.>=Z[1]-(1-yˢᴳ¹)*Zₘₐₓ)
+@variable(model, Z[1:3,1:3])  # N*N matrix for reactance 
 
+@variable(model, μ_g1[1:T])   # McCormick envelopes relaxation for the product of binary variable and reactance
+@variable(model, μ_g2[1:T])  
 
-@constraint(model, Z[1]*Y_0[1,1]+Z[2]*Y_0[2,1]+Z[3]*Y_0[3,1]==1)
+for t in 1:T 
+@constraint(model, μ_g1[t]<=yˢᴳ¹[t]*Zₘₐₓ)   
+@constraint(model, μ_g1[t]>=-yˢᴳ¹[t]*Zₘₐₓ)
+@constraint(model, μ_g1[t]<=Z[1,1]+(1-yˢᴳ¹[t])*Zₘₐₓ)
+@constraint(model, μ_g1[t]>=Z[1,1]-(1-yˢᴳ¹[t])*Zₘₐₓ)
 
+@constraint(model, μ_g2[t]<=yˢᴳ²[t]*Zₘₐₓ)   
+@constraint(model, μ_g2[t]>=-yˢᴳ²[t]*Zₘₐₓ)
+@constraint(model, μ_g2[t]<=Z[2,2]+(1-yˢᴳ²[t])*Zₘₐₓ)
+@constraint(model, μ_g2[t]>=Z[2,2]-(1-yˢᴳ²[t])*Zₘₐₓ)
+
+@constraint(model, Z[1,1]*Y_0[1,1]+Y_g[1, 1]*μ_g1[t]+Z[1,2]*Y_0[2,1]+Z[1,3]*Y_0[3,1]==1)    # constraints for the diagonal elements of the matrix
+@constraint(model, Z[2,1]*Y_0[1,2]+Z[2,2]*Y_0[2,2]+Y_g[2, 2]*μ_g2[t]+Z[2,3]*Y_0[3,2]==1) 
+@constraint(model, Z[3,1]*Y_0[1,3]+Z[3,2]*Y_0[2,3]+Z[3,3]*Y_0[3,3]==1) 
+end
+
+@constraint(model, Z[1,1]*Y_0[1,2]+Z[1,2]*Y_0[2,2]+Z[1,3]*Y_0[3,2]==0)                       # constraints for the off-diagonal elements of the matrix
+@constraint(model, Z[1,1]*Y_0[1,3]+Z[1,2]*Y_0[2,3]+Z[1,3]*Y_0[3,3]==0)                                                                                          
+@constraint(model, Z[2,1]*Y_0[1,1]+Z[2,2]*Y_0[2,1]+Z[2,3]*Y_0[3,1]==0)
+@constraint(model, Z[2,1]*Y_0[1,3]+Z[2,2]*Y_0[2,3]+Z[2,3]*Y_0[3,3]==0)
+@constraint(model, Z[3,1]*Y_0[1,1]+Z[3,2]*Y_0[2,1]+Z[3,3]*Y_0[3,1]==0)
+@constraint(model, Z[3,1]*Y_0[1,2]+Z[3,2]*Y_0[2,2]+Z[3,3]*Y_0[3,2]==0)
+ 
+for t in 1:T   # bounds for the SCC of SG in bus 1
+@constraint(model, -Z[1,1]*I_SGs[1]*yˢᴳ¹[t]-Z[1,2]*I_SGs[2]*yˢᴳ²[t]-Z[1,3]*I_IBG*α[t]>=Iₗᵢₘ*Z[1,1])
+end
 
 #-------Define Objective Functions
 No_load_cost=sum(Cⁿˡ[1].*yˢᴳ¹)+sum(Cⁿˡ[2].*yˢᴳ²)       # no-load cost
@@ -133,7 +153,7 @@ Onoff_cost=sum(Cᵁ¹)+sum(Cᴰ¹)+sum(Cᵁ²)+sum(Cᴰ²)        # on/off cost
 
 
 #-----------------------------------Solve and Output Results
-set_optimizer(model , SCIP.Optimizer)
+set_optimizer(model , Gurobi.Optimizer)
 # set_attribute(model, "limits/gap", 0.0280)
 # set_time_limit_sec(model, 700.0)
 optimize!(model)
